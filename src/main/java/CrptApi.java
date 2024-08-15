@@ -19,31 +19,29 @@ public class CrptApi {
     private static final String API_URL = "https://ismp.crpt.ru/api/v3/lk/documents/create";
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static String signature;
+    private final long interval;
     public TimeUnit timeUnit;
     public final int requestLimit;
     public Semaphore semaphore;
+    private final RequestExecutor actionator;
 
-    public static void main(String[] args) {
 
-        int requestLimit = 5;
-        long intervalMillis = 5;
-        TimeUnit timeUnit1 = TimeUnit.SECONDS;
+    public CrptApi(TimeUnit timeUnit, int requestLimit) {
+        this.timeUnit = timeUnit;
+        this.requestLimit = requestLimit;
+        this.semaphore = new Semaphore(requestLimit, true);
+        this.interval = timeUnit.toMillis(1);
+        this.actionator = new RateLimitedRequestExecutor(requestLimit, interval, timeUnit);
 
-        RequestExecutor actionator = new RateLimitedRequestExecutor(requestLimit, intervalMillis, timeUnit1);
+    }
 
+    public static void main(String[] args) throws JsonProcessingException {
+
+       var api = new CrptApi(TimeUnit.MINUTES, 2);
         DocumentDto document = createSampleDocumentDto();
-        String signature = "CEO signature";
 
-        for (int i =0; i< 100; i++) {
-            actionator.execute(() -> {
-
-                try {
-                    sendDocument(document, signature);
-                } catch (JsonProcessingException e) {
-                    throw new RuntimeException("Could not send request", e);
-                }
-
-            });
+        for (int i = 0; i < 100; i++) {
+            api.sendDocument(document, signature);
         }
     }
 
@@ -94,28 +92,35 @@ public class CrptApi {
         return objectMapper.writeValueAsString(document);
     }
 
-    private static void sendDocument(DocumentDto document, String signature) throws JsonProcessingException {
+    private void sendDocument(DocumentDto document, String signature) throws JsonProcessingException {
 
-        CrptApi.signature = signature;
+        actionator.execute(() -> {
 
-        String json = serializeDocument(document);
+            try {
 
-        try {
+                setSignature(signature);
 
-            int responseCode = getResponseCode(json);
-            System.out.println("Response Code: " + responseCode);
+                String json = serializeDocument(document);
 
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                System.out.println("Document sent successfully.");
-            } else {
-                System.out.println("Failed to send document. Response code: " + responseCode);
+                    int responseCode = getResponseCode(json);
+                    System.out.println("Response Code: " + responseCode);
+
+                    if (responseCode == HttpURLConnection.HTTP_OK) {
+                        System.out.println("Document sent successfully.");
+                    } else {
+                        System.out.println("Failed to send document. Response code: " + responseCode);
+                    }
+
+                System.out.println(json);
+            } catch (JsonProcessingException e) {
+                throw new RuntimeException("Could not serialize document", e);
+            } catch (IOException e) {
+                throw new RuntimeException("Could not send request", e);
             }
-        } catch (Exception e) {
-            throw new RuntimeException("Could not send request", e);
-        }
-        System.out.println(json);
-    }
 
+        });
+
+    }
     private static int getResponseCode(String json) throws IOException {
         URL url = new URL(API_URL);
 
@@ -134,28 +139,6 @@ public class CrptApi {
     }
 
 
-    public CrptApi(TimeUnit timeUnit, int requestLimit) {
-        this.timeUnit = timeUnit;
-        this.requestLimit = requestLimit;
-        long intervalMillis = timeUnit.toMillis(1);
-        this.semaphore = new Semaphore(requestLimit, true);
-
-        RequestExecutor actionator = new RateLimitedRequestExecutor(requestLimit, intervalMillis, timeUnit);
-
-        DocumentDto document = new DocumentDto();
-
-            actionator.execute(() -> {
-
-                try {
-                    sendDocument(document, signature);
-                } catch (JsonProcessingException e) {
-                    throw new RuntimeException("Could not send request", e);
-                }
-
-            });
-
-
-    }
 
     public static String getSignature() {
         return signature;
@@ -178,13 +161,13 @@ public class CrptApi {
         private final Semaphore semaphore;
         private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
-        public RateLimitedRequestExecutor(int requestLimit, long interval, TimeUnit timeUnit) {
+        public RateLimitedRequestExecutor(int requestLimit, long intervalMillis, TimeUnit timeUnit) {
             this.semaphore = new Semaphore(requestLimit, true);
 
             // Scheduler resets the semaphore permits after the interval
-            scheduler.scheduleAtFixedRate(() ->
-                    semaphore.release(requestLimit - semaphore.availablePermits()),
-                    interval, interval, timeUnit);
+            scheduler.scheduleAtFixedRate(() -> {
+                semaphore.release(requestLimit - semaphore.availablePermits());
+            }, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
 
             // Thread for processing the queue
            Thread processingThread = new Thread(() -> {
