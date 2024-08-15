@@ -1,3 +1,5 @@
+package org.example.service;
+
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.databind.*;
@@ -8,49 +10,39 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 
 public class CrptApi {
 
-    private static final String API_URL = "https://ismp.crpt.ru/api/v3/lk/documents/create";
-    private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static String signature;
-    private final long interval;
-    public TimeUnit timeUnit;
-    public final int requestLimit;
-    public Semaphore semaphore;
-    private final RequestExecutor actionator;
-
-
-    public CrptApi(TimeUnit timeUnit, int requestLimit) {
-        this.timeUnit = timeUnit;
-        this.requestLimit = requestLimit;
-        this.semaphore = new Semaphore(requestLimit, true);
-        this.interval = timeUnit.toMillis(1);
-        this.actionator = new RateLimitedRequestExecutor(requestLimit, interval, timeUnit);
-
-    }
-
     public static void main(String[] args) throws JsonProcessingException {
 
-       var api = new CrptApi(TimeUnit.MINUTES, 2);
+        var api = new CrptApi(TimeUnit.MINUTES, 2);
         DocumentDto document = createSampleDocumentDto();
 
+        //cycle for tests
         for (int i = 0; i < 100; i++) {
             api.sendDocument(document, signature);
         }
     }
 
+    private static final String API_URL = "https://ismp.crpt.ru/api/v3/lk/documents/create";
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static String signature;
+    private final RequestExecutor actionator;
+
+
+    public CrptApi(TimeUnit timeUnit, int requestLimit) {
+
+        long interval = timeUnit.toMillis(1);
+        this.actionator = new RateLimitedRequestExecutor(requestLimit, interval, timeUnit);
+
+    }
 
     private static DocumentDto createSampleDocumentDto() {
         DocumentDto document = new DocumentDto();
         DocumentDto.Description description = new DocumentDto.Description();
         description.setParticipantInn("1234567890");
-
 
         document.setDescription(description);
         document.setDocId("doc123");
@@ -92,7 +84,8 @@ public class CrptApi {
         return objectMapper.writeValueAsString(document);
     }
 
-    private void sendDocument(DocumentDto document, String signature) throws JsonProcessingException {
+    private void sendDocument(DocumentDto document, String signature) {
+
 
         actionator.execute(() -> {
 
@@ -102,25 +95,26 @@ public class CrptApi {
 
                 String json = serializeDocument(document);
 
-                    int responseCode = getResponseCode(json);
-                    System.out.println("Response Code: " + responseCode);
+                int responseCode = getResponseCode(json);
 
-                    if (responseCode == HttpURLConnection.HTTP_OK) {
-                        System.out.println("Document sent successfully.");
-                    } else {
-                        System.out.println("Failed to send document. Response code: " + responseCode);
-                    }
+                if (responseCode != HttpURLConnection.HTTP_OK) {
 
-                System.out.println(json);
+                    throw new RuntimeException("Failed to send document. Response code: " + responseCode);
+                }
+
             } catch (JsonProcessingException e) {
+
                 throw new RuntimeException("Could not serialize document", e);
+
             } catch (IOException e) {
+
                 throw new RuntimeException("Could not send request", e);
             }
 
         });
 
     }
+
     private static int getResponseCode(String json) throws IOException {
         URL url = new URL(API_URL);
 
@@ -139,7 +133,6 @@ public class CrptApi {
     }
 
 
-
     public static String getSignature() {
         return signature;
     }
@@ -155,9 +148,8 @@ public class CrptApi {
 
     }
 
-
     public static class RateLimitedRequestExecutor implements RequestExecutor {
-        private final Queue<Runnable> queue = new LinkedList<>();
+        private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
         private final Semaphore semaphore;
         private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
@@ -170,16 +162,10 @@ public class CrptApi {
             }, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
 
             // Thread for processing the queue
-           Thread processingThread = new Thread(() -> {
+            Thread processingThread = new Thread(() -> {
                 while (true) {
                     try {
-                        Runnable action;
-                        synchronized (queue) {
-                            while (queue.isEmpty()) {
-                                queue.wait();
-                            }
-                            action = queue.poll();
-                        }
+                        Runnable action = queue.take();
                         semaphore.acquire();
                         action.run();
                     } catch (InterruptedException e) {
@@ -187,61 +173,17 @@ public class CrptApi {
                     }
                 }
             });
-            processingThread.setDaemon (true);
+            processingThread.setDaemon(true);
             processingThread.start();
         }
 
         @Override
         public void execute(Runnable action) {
 
-            synchronized (queue) {
-                queue.add(action);
-                queue.notify();
-            }
-            System.out.println("Queue size: " + queue.size());
+            queue.add(action);
         }
 
-        }
-
-
-//    public static class LoggingRequestExecutor implements RequestExecutor {
-//
-//        @Override
-//        public void execute(Runnable action) {
-//            System.out.println("Начинаю выполнение действия.");
-//
-//            action.run();
-//
-//            System.out.println("Заканчиваю выполнение действия.");
-//
-//
-//        }
-//    }
-/*
-В теле запроса передается в формате JSON документ:
- {"description": { "participantInn": "string" },
- "doc_id": "string",
- "doc_status": "string",
- "doc_type": "LP_INTRODUCE_GOODS",
- 109 "importRequest": true,
- "owner_inn": "string",
- "participant_inn": "string",
- "producer_inn": "string",
- "production_date": "2020-01-23",
- "production_type": "string",
- "products": [ { "certificate_document": "string",
- "certificate_document_date": "2020-01-23",
- "certificate_document_number": "string",
- "owner_inn": "string",
- "producer_inn": "string",
- "production_date": "2020-01-23",
- "tnved_code": "string",
- "uit_code": "string",
- "uitu_code": "string" } ],
-  "reg_date": "2020-01-23",
-  "reg_number": "string"}
-
- */
+    }
 
     public static class DocumentDto {
 
