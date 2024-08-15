@@ -182,10 +182,12 @@ public class CrptApi {
             this.semaphore = new Semaphore(requestLimit, true);
 
             // Scheduler resets the semaphore permits after the interval
-            scheduler.scheduleAtFixedRate(() -> semaphore.release(requestLimit - semaphore.availablePermits()), interval, interval, timeUnit);
+            scheduler.scheduleAtFixedRate(() ->
+                    semaphore.release(requestLimit - semaphore.availablePermits()),
+                    interval, interval, timeUnit);
 
             // Thread for processing the queue
-            new Thread(() -> {
+           Thread processingThread = new Thread(() -> {
                 while (true) {
                     try {
                         Runnable action;
@@ -201,7 +203,9 @@ public class CrptApi {
                         Thread.currentThread().interrupt();
                     }
                 }
-            }).start();
+            });
+            processingThread.setDaemon (true);
+            processingThread.start();
         }
 
         @Override
