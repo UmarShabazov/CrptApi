@@ -15,27 +15,26 @@ import java.util.concurrent.*;
 
 public class CrptApi {
 
-    public static void main(String[] args) throws JsonProcessingException {
+    public static void main(String[] args) {
 
-        var api = new CrptApi(TimeUnit.MINUTES, 2);
+        var api = new CrptApi(TimeUnit.MINUTES, 3);
         DocumentDto document = createSampleDocumentDto();
 
-        //cycle for tests
         for (int i = 0; i < 100; i++) {
-            api.sendDocument(document, signature);
+            api.sendDocument(document, "CeoSignature");
+
         }
     }
 
-    private static final String API_URL = "https://ismp.crpt.ru/api/v3/lk/documents/create";
+    private static final String API_URL = "https://ismp.crpt.ru/api/v3";
+    private static final String path = "/lk/documents/create";
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static String signature;
-    private final RequestExecutor actionator;
+    private final Executor executor;
 
 
     public CrptApi(TimeUnit timeUnit, int requestLimit) {
 
-        long interval = timeUnit.toMillis(1);
-        this.actionator = new RateLimitedRequestExecutor(requestLimit, interval, timeUnit);
+        this.executor = new RateLimitedExecutor(requestLimit, timeUnit);
 
     }
 
@@ -86,18 +85,16 @@ public class CrptApi {
 
     private void sendDocument(DocumentDto document, String signature) {
 
-
-        actionator.execute(() -> {
+        executor.execute(() -> {
 
             try {
 
-                setSignature(signature);
-
                 String json = serializeDocument(document);
 
-                int responseCode = getResponseCode(json);
+                int responseCode = callCreateDocument(json);
 
                 if (responseCode != HttpURLConnection.HTTP_OK) {
+                    System.out.println(responseCode);
 
                     throw new RuntimeException("Failed to send document. Response code: " + responseCode);
                 }
@@ -115,8 +112,11 @@ public class CrptApi {
 
     }
 
-    private static int getResponseCode(String json) throws IOException {
-        URL url = new URL(API_URL);
+    /**
+     * @return Http response code
+     */
+    private static int callCreateDocument(String json) throws IOException {
+        URL url = new URL(API_URL + path);
 
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
 
@@ -129,37 +129,27 @@ public class CrptApi {
             byte[] input = json.getBytes(StandardCharsets.UTF_8);
             os.write(input, 0, input.length);
         }
+
         return connection.getResponseCode();
     }
 
-
-    public static String getSignature() {
-        return signature;
-    }
-
-    public static void setSignature(String signature) {
-        CrptApi.signature = signature;
-    }
-
-
-    public interface RequestExecutor {
+    public interface Executor {
 
         void execute(Runnable action);
-
     }
 
-    public static class RateLimitedRequestExecutor implements RequestExecutor {
+    public static class RateLimitedExecutor implements Executor {
         private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
         private final Semaphore semaphore;
         private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
-        public RateLimitedRequestExecutor(int requestLimit, long intervalMillis, TimeUnit timeUnit) {
+        public RateLimitedExecutor(int requestLimit, TimeUnit timeUnit) {
             this.semaphore = new Semaphore(requestLimit, true);
 
             // Scheduler resets the semaphore permits after the interval
             scheduler.scheduleAtFixedRate(() -> {
                 semaphore.release(requestLimit - semaphore.availablePermits());
-            }, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+            }, 1, 1, timeUnit);
 
             // Thread for processing the queue
             Thread processingThread = new Thread(() -> {
@@ -443,7 +433,6 @@ public class CrptApi {
                 this.uituCode = uituCode;
             }
         }
-
 
     }
 }
