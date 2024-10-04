@@ -1,5 +1,5 @@
 # CrptApi
-A Java-based application for sending and managing documents via the CRPT API with rate-limiting and serialization.
+A Java-based application for sending and managing documents via the CRPT API to "Честный знак" with rate-limiting and serialization.
 
 ### Backend Tech stack
 - **Java 17**
